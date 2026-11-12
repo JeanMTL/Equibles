@@ -73,6 +73,41 @@ public class FinancialFactsImportService
 
     public async Task Import(EquityIssuer stock, CancellationToken cancellationToken)
     {
+        await ImportCore(stock, LoadCompanyFacts, cancellationToken);
+    }
+
+    /// <summary>
+    /// Imports an already obtained Company Facts payload through the same persistence,
+    /// quality-filtering, fiscal-calendar and idempotency path as the SEC-backed worker.
+    /// This seam is intended for deterministic offline imports and tests; callers remain
+    /// responsible for obtaining the payload from an approved source.
+    /// </summary>
+    public Task ImportProvidedFacts(
+        EquityIssuer stock,
+        CompanyFactsResponse response,
+        CancellationToken cancellationToken
+    )
+    {
+        ArgumentNullException.ThrowIfNull(stock);
+        ArgumentNullException.ThrowIfNull(response);
+        if (!long.TryParse(stock.Cik, out var issuerCik) || issuerCik != response.Cik)
+            throw new InvalidDataException(
+                $"Company Facts CIK {response.Cik} does not match issuer CIK {stock.Cik}."
+            );
+
+        return ImportCore(
+            stock,
+            (_, _) => Task.FromResult<List<CompanyFactsResponse>>([response]),
+            cancellationToken
+        );
+    }
+
+    private async Task ImportCore(
+        EquityIssuer stock,
+        Func<EquityIssuer, CancellationToken, Task<List<CompanyFactsResponse>>> loadFacts,
+        CancellationToken cancellationToken
+    )
+    {
         if (string.IsNullOrEmpty(stock.Cik))
             return;
 
@@ -82,7 +117,10 @@ public class FinancialFactsImportService
 
         try
         {
-            await ImportAttempt(stock, cancellationToken);
+            var responses = await loadFacts(stock, cancellationToken);
+            if (responses is null)
+                return;
+            await ImportAttempt(stock, responses, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -105,7 +143,10 @@ public class FinancialFactsImportService
         }
     }
 
-    private async Task ImportAttempt(EquityIssuer stock, CancellationToken cancellationToken)
+    private async Task<List<CompanyFactsResponse>> LoadCompanyFacts(
+        EquityIssuer stock,
+        CancellationToken cancellationToken
+    )
     {
         // Every attached CIK contributes to ONE fact set: a holdco reorganisation
         // moves the ticker to a NEW registrant while the entire XBRL history stays
@@ -131,13 +172,22 @@ public class FinancialFactsImportService
                     stock.Presentation?.Listing?.Ticker,
                     cik
                 );
-                return;
+                return null;
             }
 
             if (response != null && response.Facts.Count > 0)
                 responses.Add(response);
         }
 
+        return responses;
+    }
+
+    private async Task ImportAttempt(
+        EquityIssuer stock,
+        List<CompanyFactsResponse> responses,
+        CancellationToken cancellationToken
+    )
+    {
         // Guards GH-1591: the stock can be deleted during the network calls
         // above. Without this check, every UpsertSyncStatus and FlushFacts
         // path below trips FK_*_CommonStock_CommonStockId on Postgres. The

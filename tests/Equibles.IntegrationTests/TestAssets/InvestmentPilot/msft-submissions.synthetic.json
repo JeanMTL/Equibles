@@ -1,0 +1,13 @@
+{
+  "cik": "0000789019",
+  "name": "Microsoft Corporation (synthetic test fixture)",
+  "filings": {
+    "recent": {
+      "accessionNumber": ["0000789019-25-000001"],
+      "filingDate": ["2025-07-30"],
+      "reportDate": ["2025-06-30"],
+      "form": ["10-K"],
+      "primaryDocument": ["synthetic-10k.htm"]
+    }
+  }
+}
