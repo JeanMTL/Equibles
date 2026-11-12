@@ -57,7 +57,7 @@ public sealed class InvestmentPilotOfflineImportWebTests
                 scope.ServiceProvider.GetRequiredService<ILogger<FinancialFactsImportService>>(),
                 scope.ServiceProvider.GetRequiredService<ErrorReporter>()
             );
-            await importer.ImportProvidedFacts(issuer, response, CancellationToken.None);
+            await importer.ImportProvidedFactsForPilot(issuer, response, CancellationToken.None);
         }
 
         var webResponse = await _fixture.Client.GetAsync("/Stocks/MSFT/Financials");
