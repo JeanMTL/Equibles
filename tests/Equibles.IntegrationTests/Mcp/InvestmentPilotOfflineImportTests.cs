@@ -167,13 +167,16 @@ public sealed class InvestmentPilotOfflineImportTests : ParadeDbMcpTestBase
         result.Should().Contain("https://data.sec.gov/api/xbrl/companyfacts/CIK0000789019.json");
     }
 
-    [Fact]
-    public async Task Bootstrapper_RefusesToAttachMsftCikToAnUnrelatedIssuer()
+    [Theory]
+    [InlineData("789019")]
+    [InlineData("0789019")]
+    [InlineData("0000789019")]
+    public async Task Bootstrapper_RefusesToAttachMsftCikToAnUnrelatedIssuer(string existingCik)
     {
         var existing = Equibles.TestSupport.EquityIssuerSeed.Create(
             Ticker: "OTHER",
             Name: "Unrelated company",
-            Cik: "789019"
+            Cik: existingCik
         );
         DbContext.Add(existing);
         await DbContext.SaveChangesAsync();

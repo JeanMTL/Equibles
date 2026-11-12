@@ -68,11 +68,14 @@ public class EquityDirectoryIdentityImporter(IServiceScopeFactory scopeFactory)
         if (input.IssuerCik != null)
         {
             var canonicalCik = CikNormalizer.Canonicalize(input.IssuerCik);
-            var cikOwners = await issuers
+            var cikOwners = (await issuers
                 .GetAll()
-                .Where(row => row.Cik == input.IssuerCik || row.Cik == canonicalCik)
+                .Where(row => row.Cik != null)
+                .Select(row => new { row.Id, row.Cik })
+                .ToListAsync(cancellationToken))
+                .Where(row => CikNormalizer.Canonicalize(row.Cik) == canonicalCik)
                 .Select(row => row.Id)
-                .ToListAsync(cancellationToken);
+                .ToList();
             if (
                 cikOwners.Any(ownerId => issuer == null || ownerId != issuer.Id)
                 || issuer?.Cik != null

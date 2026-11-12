@@ -14,20 +14,14 @@ public sealed class MsftIssuerBootstrapperTests
     [InlineData("789019")]
     public async Task ImportAsync_UsesOnlyTheValidatedMsftListingImporter(string cik)
     {
-        EquityDirectoryListingInput captured = null;
-        var listingId = Guid.NewGuid();
-        var importer = new EquityDirectoryIdentityImporter(Substitute.For<IServiceScopeFactory>());
-        importer
-            .ImportListing(
-                Arg.Do<EquityDirectoryListingInput>(input => captured = input),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(listingId);
+        var importer = new RecordingIdentityImporter();
         var bootstrapper = new MsftIssuerBootstrapper(importer);
 
         var result = await bootstrapper.ImportAsync(Evidence(cik));
 
-        result.Should().Be(listingId);
+        result.Should().Be(importer.ListingId);
+        importer.Calls.Should().Be(1);
+        var captured = importer.Captured;
         captured.Should().NotBeNull();
         captured.Source.Should().Be(MsftIssuerBootstrapper.Source);
         captured.SourceIssuerIdentifier.Should().Be(MsftIssuerBootstrapper.IssuerCik);
@@ -41,7 +35,6 @@ public sealed class MsftIssuerBootstrapperTests
         captured.SourceUrl.Should().Be(MsftIssuerBootstrapper.ListingSourceUrl);
         captured.PayloadJson.Should().Contain(MsftIssuerBootstrapper.CikSourceUrl);
         captured.PayloadJson.Should().Contain("\"cik\":789019");
-        await importer.Received(1).ImportListing(captured, Arg.Any<CancellationToken>());
     }
 
     [Theory]
@@ -54,7 +47,7 @@ public sealed class MsftIssuerBootstrapperTests
         string isin
     )
     {
-        var importer = new EquityDirectoryIdentityImporter(Substitute.For<IServiceScopeFactory>());
+        var importer = new RecordingIdentityImporter();
         var bootstrapper = new MsftIssuerBootstrapper(importer);
         var evidence = Evidence("0000789019") with
         {
@@ -66,13 +59,13 @@ public sealed class MsftIssuerBootstrapperTests
         var act = () => bootstrapper.ImportAsync(evidence);
 
         await act.Should().ThrowAsync<InvalidDataException>();
-        await importer.DidNotReceiveWithAnyArgs().ImportListing(default);
+        importer.Calls.Should().Be(0);
     }
 
     [Fact]
     public async Task ImportAsync_RejectsMismatchedSourceIdentityBeforeWriting()
     {
-        var importer = new EquityDirectoryIdentityImporter(Substitute.For<IServiceScopeFactory>());
+        var importer = new RecordingIdentityImporter();
         var bootstrapper = new MsftIssuerBootstrapper(importer);
         var evidence = Evidence("0000789019") with
         {
@@ -82,13 +75,13 @@ public sealed class MsftIssuerBootstrapperTests
         var act = () => bootstrapper.ImportAsync(evidence);
 
         await act.Should().ThrowAsync<InvalidDataException>();
-        await importer.DidNotReceiveWithAnyArgs().ImportListing(default);
+        importer.Calls.Should().Be(0);
     }
 
     [Fact]
     public async Task ImportAsync_RejectsNonAllowlistedSourceUrlsBeforeWriting()
     {
-        var importer = new EquityDirectoryIdentityImporter(Substitute.For<IServiceScopeFactory>());
+        var importer = new RecordingIdentityImporter();
         var bootstrapper = new MsftIssuerBootstrapper(importer);
         var evidence = Evidence("0000789019") with
         {
@@ -98,7 +91,7 @@ public sealed class MsftIssuerBootstrapperTests
         var act = () => bootstrapper.ImportAsync(evidence);
 
         await act.Should().ThrowAsync<InvalidDataException>();
-        await importer.DidNotReceiveWithAnyArgs().ImportListing(default);
+        importer.Calls.Should().Be(0);
     }
 
     internal static MsftIssuerBootstrapEvidence Evidence(string cik) =>
@@ -116,4 +109,22 @@ public sealed class MsftIssuerBootstrapperTests
             "{\"cik\":789019,\"entityName\":\"MICROSOFT CORPORATION\"}",
             "{\"ticker\":\"MSFT\",\"isin\":\"US5949181045\",\"mic\":\"XNAS\",\"country\":\"US\",\"currency\":\"USD\",\"issuerName\":\"Microsoft Corporation\"}"
         );
+
+    private sealed class RecordingIdentityImporter()
+        : EquityDirectoryIdentityImporter(Substitute.For<IServiceScopeFactory>())
+    {
+        public Guid ListingId { get; } = Guid.NewGuid();
+        public int Calls { get; private set; }
+        public EquityDirectoryListingInput Captured { get; private set; }
+
+        public override Task<Guid> ImportListing(
+            EquityDirectoryListingInput input,
+            CancellationToken cancellationToken = default
+        )
+        {
+            Calls++;
+            Captured = input;
+            return Task.FromResult(ListingId);
+        }
+    }
 }
