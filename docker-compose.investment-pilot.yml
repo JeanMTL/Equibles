@@ -1,5 +1,30 @@
 # Explicitly opt-in one-shot command. Do not include this file in routine `compose up`.
 services:
+  # Opt-in only: imports one offline reviewed MSFT identity packet through Equibles'
+  # validated transactional listing importer. It does not call any external source.
+  msft-issuer-init:
+    profiles: [investment-pilot-init]
+    build:
+      context: ${EQUIBLES_SOURCE_DIR:?Set EQUIBLES_SOURCE_DIR to /volume1/docker/investment-equibles/source}
+      dockerfile: src/Equibles.InvestmentPilot/Dockerfile
+    image: local/equibles-investment-pilot:msft
+    command: ["--initialize-msft-issuer"]
+    restart: "no"
+    network_mode: "service:db"
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=127.0.0.1;Port=5432;Database=equibles;Username=${POSTGRES_USER:-equibles};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the project .env}"
+    volumes:
+      - ${MSFT_ISSUER_EVIDENCE_FILE:?Set MSFT_ISSUER_EVIDENCE_FILE to a locally reviewed evidence JSON}:/run/msft-issuer-evidence.json:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 256m
+    cpus: 0.25
+    pids_limit: 32
+
   msft-sec-once:
     profiles: [investment-pilot]
     build:
@@ -11,7 +36,7 @@ services:
     network_mode: "service:db"
     environment:
       ConnectionStrings__DefaultConnection: "Host=127.0.0.1;Port=5432;Database=equibles;Username=${POSTGRES_USER:-equibles};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the project .env}"
-      Sec__ContactEmail: ${SEC_CONTACT_EMAIL:?Set the genuine SEC contact email in the local ignored .env}
+      Sec__ContactEmail: ${SEC_CONTACT_EMAIL:-}
     read_only: true
     tmpfs:
       - /tmp:size=16m,noexec,nosuid

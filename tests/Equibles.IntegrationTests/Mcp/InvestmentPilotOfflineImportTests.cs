@@ -1,3 +1,4 @@
+using Equibles.CommonStocks.BusinessLogic.Directory;
 using Equibles.CommonStocks.Data.Models;
 using Equibles.CommonStocks.Repositories;
 using Equibles.CorporateActions.Repositories;
@@ -46,15 +47,19 @@ public sealed class InvestmentPilotOfflineImportTests : ParadeDbMcpTestBase
         string storedCik
     )
     {
-        var issuer = Equibles.TestSupport.EquityIssuerSeed.Create(
-            Ticker: "MSFT",
-            Name: "Microsoft Corporation (synthetic test fixture)",
-            Cik: storedCik,
-            FiscalYearEndMonth: 6,
-            FiscalYearEndDay: 30
-        );
-        DbContext.Set<EquityIssuer>().Add(issuer);
-        await DbContext.SaveChangesAsync();
+        var identityImporter = new EquityDirectoryIdentityImporter(CreateImportScopeFactory());
+        var bootstrapper = new MsftIssuerBootstrapper(identityImporter);
+        var evidence = MsftEvidence(storedCik);
+        var bootstrapListingId = await bootstrapper.ImportAsync(evidence);
+        (await bootstrapper.ImportAsync(evidence)).Should().Be(bootstrapListingId);
+        var issuer = await DbContext.Set<EquityIssuer>()
+            .Include(row => row.Presentation)
+            .ThenInclude(row => row.Listing)
+            .SingleAsync(row => row.Cik == storedCik);
+        issuer.Presentation.Listing.Id.Should().Be(bootstrapListingId);
+        issuer.Presentation.Listing.Ticker.Should().Be("MSFT");
+        issuer.Presentation.Listing.MarketCountryCode.Should().Be("US");
+        (await DbContext.Set<EquityIssuer>().CountAsync()).Should().Be(1);
 
         var fixturePath = Path.Combine(
             AppContext.BaseDirectory,
@@ -162,6 +167,42 @@ public sealed class InvestmentPilotOfflineImportTests : ParadeDbMcpTestBase
         result.Should().Contain("https://data.sec.gov/api/xbrl/companyfacts/CIK0000789019.json");
     }
 
+    [Fact]
+    public async Task Bootstrapper_RefusesToAttachMsftCikToAnUnrelatedIssuer()
+    {
+        var existing = Equibles.TestSupport.EquityIssuerSeed.Create(
+            Ticker: "OTHER",
+            Name: "Unrelated company",
+            Cik: "789019"
+        );
+        DbContext.Add(existing);
+        await DbContext.SaveChangesAsync();
+        var importer = new EquityDirectoryIdentityImporter(CreateImportScopeFactory());
+        var bootstrapper = new MsftIssuerBootstrapper(importer);
+
+        var act = () => bootstrapper.ImportAsync(MsftEvidence("0000789019"));
+
+        await act.Should().ThrowAsync<InvalidDataException>()
+            .WithMessage("*refusing an inferred merge*");
+        (await DbContext.Set<EquityIssuer>().CountAsync()).Should().Be(1);
+        (await DbContext.Set<EquityListing>().CountAsync()).Should().Be(1);
+    }
+
+    private static MsftIssuerBootstrapEvidence MsftEvidence(string cik) => new(
+        cik,
+        MsftIssuerBootstrapper.IssuerName,
+        MsftIssuerBootstrapper.Isin,
+        MsftIssuerBootstrapper.Ticker,
+        MsftIssuerBootstrapper.MarketIdentifierCode,
+        MsftIssuerBootstrapper.MarketCountryCode,
+        MsftIssuerBootstrapper.TradingCurrency,
+        1m,
+        MsftIssuerBootstrapper.CikSourceUrl,
+        MsftIssuerBootstrapper.ListingSourceUrl,
+        "{\"cik\":789019,\"entityName\":\"MICROSOFT CORPORATION\"}",
+        "{\"ticker\":\"MSFT\",\"isin\":\"US5949181045\",\"mic\":\"XNAS\",\"country\":\"US\",\"currency\":\"USD\",\"issuerName\":\"Microsoft Corporation\"}"
+    );
+
     private sealed class OfflineCompanyFactsSource(CompanyFactsResponse response) : ISecCompanyFactsSource
     {
         public Task<SecCompanyFactsDownload> FetchMsftAsync(
@@ -207,6 +248,12 @@ public sealed class InvestmentPilotOfflineImportTests : ParadeDbMcpTestBase
                 provider
                     .GetService(typeof(EquityIssuerRepository))
                     .Returns(new EquityIssuerRepository(context));
+                provider
+                    .GetService(typeof(EquityListingRepository))
+                    .Returns(new EquityListingRepository(context));
+                provider
+                    .GetService(typeof(EquityDirectorySourceRecordRepository))
+                    .Returns(new EquityDirectorySourceRecordRepository(context));
                 var scope = Substitute.For<IServiceScope>();
                 scope.ServiceProvider.Returns(provider);
                 return scope;
