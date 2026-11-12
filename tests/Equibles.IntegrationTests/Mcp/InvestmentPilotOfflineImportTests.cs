@@ -125,7 +125,7 @@ public sealed class InvestmentPilotOfflineImportTests : ParadeDbMcpTestBase
             NullLogger<FinancialFactsTools>()
         );
         var result = await tool.GetFinancialFact("MSFT", "revenue");
-        result.Should().Contain("FY2025");
+        result.Should().Contain("2025 | FY");
         result.Should().Contain("123,456,789,000");
         result.Should().Contain("USD");
         result.Should().Contain("Source CIK");
