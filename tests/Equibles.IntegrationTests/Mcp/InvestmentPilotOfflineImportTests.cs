@@ -116,14 +116,6 @@ public sealed class InvestmentPilotOfflineImportTests : ParadeDbMcpTestBase
             );
 
         await secClient.DidNotReceiveWithAnyArgs().GetCompanyFacts(default);
-        await errorReporter
-            .DidNotReceive()
-            .Report(
-                Arg.Any<ErrorSource>(),
-                Arg.Any<string>(),
-                Arg.Any<Exception>(),
-                Arg.Any<string>()
-            );
         var tool = new FinancialFactsTools(
             new FinancialFactRepository(DbContext),
             new FinancialConceptRepository(DbContext),

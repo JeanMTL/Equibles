@@ -1,9 +1,13 @@
 using Equibles.CommonStocks.Data.Models;
+using Equibles.Integrations.Sec.Contracts;
 using Equibles.Integrations.Sec.Models.Responses;
 using Equibles.IntegrationTests.Helpers;
+using Equibles.Errors.BusinessLogic;
 using Equibles.Sec.FinancialFacts.HostedService.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
+using NSubstitute;
 using Xunit;
 
 namespace Equibles.IntegrationTests.Web;
@@ -44,7 +48,15 @@ public sealed class InvestmentPilotOfflineImportWebTests
 
         using (var scope = _fixture.Services.CreateScope())
         {
-            var importer = scope.ServiceProvider.GetRequiredService<FinancialFactsImportService>();
+            // The importer is hosted by the Worker in production and intentionally
+            // is not registered by the Web host. Exercise its shared persistence
+            // path directly without starting/registering the Worker.
+            var importer = new FinancialFactsImportService(
+                _fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+                Substitute.For<ISecEdgarClient>(),
+                scope.ServiceProvider.GetRequiredService<ILogger<FinancialFactsImportService>>(),
+                scope.ServiceProvider.GetRequiredService<ErrorReporter>()
+            );
             await importer.ImportProvidedFacts(issuer, response, CancellationToken.None);
         }
 
