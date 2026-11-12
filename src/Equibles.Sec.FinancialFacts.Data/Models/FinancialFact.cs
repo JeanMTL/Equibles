@@ -93,6 +93,17 @@ public class FinancialFact
     [MaxLength(32)]
     public string AccessionNumber { get; set; }
 
+    /// <summary>The ten-digit CIK that supplied this observation, when known.</summary>
+    [MaxLength(10)]
+    public string SourceCik { get; set; }
+
+    /// <summary>
+    /// Authoritative source endpoint used for this observation. Company Facts rows use SEC's
+    /// per-CIK API URL; this is not an invented individual filing URL.
+    /// </summary>
+    [MaxLength(2048)]
+    public string SourceUrl { get; set; }
+
     /// <summary>SEC standardized frame label, e.g. <c>CY2024Q1I</c>; null if absent.</summary>
     [MaxLength(32)]
     public string Frame { get; set; }
@@ -147,6 +158,8 @@ public class FinancialFact
             Form = Form,
             FiledDate = FiledDate,
             AccessionNumber = AccessionNumber,
+            SourceCik = SourceCik,
+            SourceUrl = SourceUrl,
             Frame = Frame,
             DimensionsKey = DimensionsKey,
             Source = Source,

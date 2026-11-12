@@ -129,6 +129,7 @@
     <ProjectReference Include="..\..\src\Equibles.EquityMarkets.Repositories\Equibles.EquityMarkets.Repositories.csproj" />
     <ProjectReference Include="..\..\src\Equibles.EquityMarkets.BusinessLogic\Equibles.EquityMarkets.BusinessLogic.csproj" />
     <ProjectReference Include="..\..\src\Equibles.EquityMarkets.HostedService\Equibles.EquityMarkets.HostedService.csproj" />
+    <ProjectReference Include="..\..\src\Equibles.InvestmentPilot\Equibles.InvestmentPilot.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../Shared/NativeListingSeed.cs" Link="Helpers/NativeListingSeed.cs" />

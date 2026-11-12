@@ -1,3 +1,4 @@
+using Equibles.CommonStocks.Data.Helpers;
 using Equibles.CommonStocks.Data.Models;
 using Equibles.CommonStocks.Repositories;
 using Equibles.Core.AutoWiring;
@@ -64,11 +65,32 @@ public class EquityDirectoryIdentityImporter(IServiceScopeFactory scopeFactory)
             instruments.IssuerIds,
             cancellationToken
         );
+        if (input.IssuerCik != null)
+        {
+            var canonicalCik = CikNormalizer.Canonicalize(input.IssuerCik);
+            var cikOwners = (await issuers
+                .GetAll()
+                .Where(row => row.Cik != null)
+                .Select(row => new { row.Id, row.Cik })
+                .ToListAsync(cancellationToken))
+                .Where(row => CikNormalizer.Canonicalize(row.Cik) == canonicalCik)
+                .Select(row => row.Id)
+                .ToList();
+            if (
+                cikOwners.Any(ownerId => issuer == null || ownerId != issuer.Id)
+                || issuer?.Cik != null
+                    && CikNormalizer.Canonicalize(issuer.Cik) != canonicalCik
+            )
+                throw new InvalidDataException(
+                    "Directory CIK conflicts with an existing issuer; refusing an inferred merge."
+                );
+        }
         if (issuer == null)
         {
             issuer = new EquityIssuer
             {
                 Name = input.IssuerName,
+                Cik = input.IssuerCik,
                 LegalEntityIdentifier = input.LegalEntityIdentifier,
                 IdentitySourceUrl = input.SourceUrl,
             };
@@ -86,6 +108,7 @@ public class EquityDirectoryIdentityImporter(IServiceScopeFactory scopeFactory)
                     "Directory source conflicts with the issuer's legal identity."
                 );
             issuer.LegalEntityIdentifier ??= input.LegalEntityIdentifier;
+            issuer.Cik ??= input.IssuerCik;
             // Only the source that supplied the current name may replace it, and SEC names always govern.
             if (
                 string.IsNullOrWhiteSpace(issuer.Name)

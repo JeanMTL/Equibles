@@ -1,3 +1,4 @@
+using System.Globalization;
 using Equibles.CommonStocks.Data.Extensions;
 using Equibles.CommonStocks.Data.Models;
 using Equibles.CommonStocks.Repositories;
@@ -73,16 +74,96 @@ public class FinancialFactsImportService
 
     public async Task Import(EquityIssuer stock, CancellationToken cancellationToken)
     {
+        if (_secEdgarClient is null)
+            throw new InvalidOperationException("SEC-backed imports are disabled for this host.");
+        await ImportCore(stock, LoadCompanyFacts, cancellationToken);
+    }
+
+    /// <summary>
+    /// Imports an already obtained Company Facts payload through the same persistence,
+    /// quality-filtering, fiscal-calendar and idempotency path as the SEC-backed worker.
+    /// This seam is intended for deterministic offline imports and tests; callers remain
+    /// responsible for obtaining the payload from an approved source.
+    /// </summary>
+    public Task ImportProvidedFacts(
+        EquityIssuer stock,
+        CompanyFactsResponse response,
+        CancellationToken cancellationToken
+    )
+    {
+        ArgumentNullException.ThrowIfNull(stock);
+        ArgumentNullException.ThrowIfNull(response);
+        if (!long.TryParse(stock.Cik, out var issuerCik) || issuerCik != response.Cik)
+            throw new InvalidDataException(
+                $"Company Facts CIK {response.Cik} does not match issuer CIK {stock.Cik}."
+            );
+
+        return ImportCore(
+            stock,
+            (_, _) => Task.FromResult<List<CompanyFactsResponse>>([response]),
+            cancellationToken,
+            throwOnError: true,
+            updateSharesOutstanding: true
+        );
+    }
+
+    /// <summary>
+    /// Imports a bounded, already-fetched Company Facts payload without touching derived
+    /// security analytics. Used by the explicit one-shot pilot; the caller owns network bounds.
+    /// </summary>
+    public Task ImportProvidedFactsForPilot(
+        EquityIssuer stock,
+        CompanyFactsResponse response,
+        CancellationToken cancellationToken
+    )
+    {
+        ArgumentNullException.ThrowIfNull(stock);
+        ArgumentNullException.ThrowIfNull(response);
+        if (!long.TryParse(stock.Cik, out var issuerCik) || issuerCik != response.Cik)
+            throw new InvalidDataException(
+                $"Company Facts CIK {response.Cik} does not match issuer CIK {stock.Cik}."
+            );
+
+        return ImportCore(
+            stock,
+            (_, _) => Task.FromResult<List<CompanyFactsResponse>>([response]),
+            cancellationToken,
+            throwOnError: true,
+            updateSharesOutstanding: false
+        );
+    }
+
+    private async Task ImportCore(
+        EquityIssuer stock,
+        Func<EquityIssuer, CancellationToken, Task<List<CompanyFactsResponse>>> loadFacts,
+        CancellationToken cancellationToken,
+        bool throwOnError = false,
+        bool updateSharesOutstanding = true
+    )
+    {
         if (string.IsNullOrEmpty(stock.Cik))
             return;
 
         var status = await GetSyncStatus(stock, cancellationToken);
         if (_attempts.IsDeferred(status))
+        {
+            if (throwOnError)
+                throw new InvalidOperationException(
+                    $"Financial facts import for {stock.Presentation?.Listing?.Ticker} is deferred after a previous failure."
+                );
             return;
+        }
 
         try
         {
-            await ImportAttempt(stock, cancellationToken);
+            var responses = await loadFacts(stock, cancellationToken);
+            if (responses is null)
+                return;
+            var imported = await ImportAttempt(stock, responses, cancellationToken, updateSharesOutstanding);
+            if (!imported && throwOnError)
+                throw new InvalidOperationException(
+                    $"Financial facts import for {stock.Presentation?.Listing?.Ticker} was deferred because fiscal-calendar evidence was incomplete or the issuer disappeared."
+                );
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -96,6 +177,9 @@ public class FinancialFactsImportService
                 stock.Presentation?.Listing?.Ticker,
                 stock.Cik
             );
+            if (throwOnError)
+                throw;
+
             await _errorReporter.Report(
                 ErrorSource.FinancialFactsScraper,
                 "FinancialFactsImport.Import",
@@ -105,7 +189,10 @@ public class FinancialFactsImportService
         }
     }
 
-    private async Task ImportAttempt(EquityIssuer stock, CancellationToken cancellationToken)
+    private async Task<List<CompanyFactsResponse>> LoadCompanyFacts(
+        EquityIssuer stock,
+        CancellationToken cancellationToken
+    )
     {
         // Every attached CIK contributes to ONE fact set: a holdco reorganisation
         // moves the ticker to a NEW registrant while the entire XBRL history stays
@@ -131,13 +218,23 @@ public class FinancialFactsImportService
                     stock.Presentation?.Listing?.Ticker,
                     cik
                 );
-                return;
+                return null;
             }
 
             if (response != null && response.Facts.Count > 0)
                 responses.Add(response);
         }
 
+        return responses;
+    }
+
+    private async Task<bool> ImportAttempt(
+        EquityIssuer stock,
+        List<CompanyFactsResponse> responses,
+        CancellationToken cancellationToken,
+        bool updateSharesOutstanding
+    )
+    {
         // Guards GH-1591: the stock can be deleted during the network calls
         // above. Without this check, every UpsertSyncStatus and FlushFacts
         // path below trips FK_*_CommonStock_CommonStockId on Postgres. The
@@ -149,12 +246,12 @@ public class FinancialFactsImportService
                 stock.Id,
                 stock.Presentation?.Listing?.Ticker
             );
-            return;
+            return false;
         }
 
         var claim = await _attempts.TryBegin(stock.Id, cancellationToken);
         if (claim == null)
-            return;
+            return false;
         var attemptId = claim.Value;
 
         var incomingAnnualPeriods = responses
@@ -194,7 +291,7 @@ public class FinancialFactsImportService
                 "Fiscal calendar evidence is incomplete for {Ticker}; deferring import",
                 stock.Presentation?.Listing?.Ticker
             );
-            return;
+            return false;
         }
         var parsed = responses
             .SelectMany(response => ParseFacts(response, stock, calendar))
@@ -209,7 +306,7 @@ public class FinancialFactsImportService
                 calendar.Fingerprint,
                 cancellationToken
             );
-            return;
+            return true;
         }
 
         var maxFiled = parsed.Max(p => p.Filed);
@@ -234,7 +331,8 @@ public class FinancialFactsImportService
             // and skip the (expensive) re-upsert of the full history. Still re-source the share
             // count: an already-ingested cover-page fact may post-date the stale Yahoo figure
             // (and this corrects existing rows the first cycle after the change ships).
-            await UpdateSharesOutstanding(stock, cancellationToken);
+            if (updateSharesOutstanding)
+                await UpdateSharesOutstanding(stock, cancellationToken);
             await _attempts.Complete(
                 stock.Id,
                 attemptId,
@@ -242,11 +340,12 @@ public class FinancialFactsImportService
                 calendar.Fingerprint,
                 cancellationToken
             );
-            return;
+            return true;
         }
 
         await PersistFacts(stock, parsed, cancellationToken);
-        await UpdateSharesOutstanding(stock, cancellationToken);
+        if (updateSharesOutstanding)
+            await UpdateSharesOutstanding(stock, cancellationToken);
         await _attempts.Complete(
             stock.Id,
             attemptId,
@@ -254,6 +353,7 @@ public class FinancialFactsImportService
             calendar.Fingerprint,
             cancellationToken
         );
+        return true;
     }
 
     // Sets the stock's share count from the authoritative SEC cover-page fact the import just
@@ -409,6 +509,8 @@ public class FinancialFactsImportService
         HistoricalFiscalCalendar calendar
     )
     {
+        var sourceCik = response.Cik.ToString("D10", CultureInfo.InvariantCulture);
+        var sourceUrl = $"https://data.sec.gov/api/xbrl/companyfacts/CIK{sourceCik}.json";
         foreach (var (taxonomyKey, concepts) in response.Facts)
         {
             if (!TryMapTaxonomy(taxonomyKey, out var taxonomy))
@@ -428,7 +530,9 @@ public class FinancialFactsImportService
                             unit,
                             value,
                             stock,
-                            calendar
+                            calendar,
+                            sourceCik,
+                            sourceUrl
                         );
                         if (fact != null)
                             yield return fact;
@@ -457,7 +561,9 @@ public class FinancialFactsImportService
         string unit,
         CompanyFactValue value,
         EquityIssuer stock,
-        HistoricalFiscalCalendar calendar
+        HistoricalFiscalCalendar calendar,
+        string sourceCik = null,
+        string sourceUrl = null
     )
     {
         if (string.IsNullOrWhiteSpace(value.Accn))
@@ -511,6 +617,8 @@ public class FinancialFactsImportService
             Filed = value.Filed,
             Accession = value.Accn,
             Frame = value.Frame,
+            SourceCik = sourceCik,
+            SourceUrl = sourceUrl,
         };
     }
 
@@ -663,6 +771,8 @@ public class FinancialFactsImportService
             Form = DocumentType.FromDisplayName(p.Form) ?? DocumentType.Other,
             FiledDate = p.Filed,
             AccessionNumber = p.Accession,
+            SourceCik = p.SourceCik,
+            SourceUrl = p.SourceUrl,
             Frame = p.Frame,
             Source = FinancialFactSource.CompanyFacts,
         };
@@ -758,6 +868,8 @@ public class FinancialFactsImportService
                         Form = incoming.Form,
                         Frame = incoming.Frame,
                         FiledDate = incoming.FiledDate,
+                        SourceCik = incoming.SourceCik,
+                        SourceUrl = incoming.SourceUrl,
                         DocumentId = incoming.DocumentId,
                         Source = incoming.Source,
                     }
@@ -774,6 +886,8 @@ public class FinancialFactsImportService
                     || (existing.Frame == null && incoming.Frame != null)
                     || (existing.Frame != null && incoming.Frame == null)
                     || existing.FiledDate != incoming.FiledDate
+                    || existing.SourceCik != incoming.SourceCik
+                    || existing.SourceUrl != incoming.SourceUrl
                     || existing.DocumentId != incoming.DocumentId
                     || (existing.DocumentId == null && incoming.DocumentId != null)
                     || (existing.DocumentId != null && incoming.DocumentId == null)
@@ -978,6 +1092,8 @@ public class FinancialFactsImportService
         public DateOnly Filed { get; init; }
         public string Accession { get; init; }
         public string Frame { get; init; }
+        public string SourceCik { get; init; }
+        public string SourceUrl { get; init; }
     }
 
     private sealed record FactNaturalKey(

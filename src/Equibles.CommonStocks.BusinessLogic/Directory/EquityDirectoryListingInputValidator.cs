@@ -1,4 +1,5 @@
 using Equibles.Core.Identity;
+using Equibles.CommonStocks.Data.Helpers;
 
 namespace Equibles.CommonStocks.BusinessLogic.Directory;
 
@@ -18,6 +19,11 @@ internal static class EquityDirectoryListingInputValidator
         Text(input.Source, 64)
         && Text(input.SourceIssuerIdentifier, 128)
         && Text(input.IssuerName, 500)
+        && (
+            input.IssuerCik == null
+            || input.IssuerCik == input.IssuerCik.Trim()
+                && CikNormalizer.Validate(input.IssuerCik) != null
+        )
         && input.IssuerNameAliases != null
         && input.IssuerNameAliases.All(name => Text(name, 500))
         && input.ReplacedIssuerNames != null

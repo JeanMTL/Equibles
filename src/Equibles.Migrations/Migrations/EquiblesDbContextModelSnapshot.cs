@@ -7198,6 +7198,14 @@ namespace Equibles.Migrations.Migrations
                     b.Property<int>("Source")
                         .HasColumnType("integer");
 
+                    b.Property<string>("SourceCik")
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)");
+
+                    b.Property<string>("SourceUrl")
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)");
+
                     b.Property<string>("Unit")
                         .IsRequired()
                         .HasMaxLength(32)

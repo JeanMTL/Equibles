@@ -16,6 +16,9 @@ public class EquityDirectoryListingInput
     // An existing security the source proved is this same share, such as an interlisted line's home-market
     // security; the listing joins it, and any identifier naming another security or issuer refuses the row.
     public Guid? ProvenSecurityId { get; set; }
+    // When an authoritative source binds the listing's legal issuer to an SEC registrant,
+    // preserve that CIK in the same identity transaction as the listing.
+    public string IssuerCik { get; set; }
     public string IssuerName { get; set; }
     public List<string> IssuerNameAliases { get; set; } = [];
 
