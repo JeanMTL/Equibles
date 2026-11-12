@@ -74,6 +74,8 @@ public class FinancialFactsImportService
 
     public async Task Import(EquityIssuer stock, CancellationToken cancellationToken)
     {
+        if (_secEdgarClient is null)
+            throw new InvalidOperationException("SEC-backed imports are disabled for this host.");
         await ImportCore(stock, LoadCompanyFacts, cancellationToken);
     }
 
@@ -99,14 +101,44 @@ public class FinancialFactsImportService
         return ImportCore(
             stock,
             (_, _) => Task.FromResult<List<CompanyFactsResponse>>([response]),
-            cancellationToken
+            cancellationToken,
+            throwOnError: true,
+            updateSharesOutstanding: true
+        );
+    }
+
+    /// <summary>
+    /// Imports a bounded, already-fetched Company Facts payload without touching derived
+    /// security analytics. Used by the explicit one-shot pilot; the caller owns network bounds.
+    /// </summary>
+    public Task ImportProvidedFactsForPilot(
+        EquityIssuer stock,
+        CompanyFactsResponse response,
+        CancellationToken cancellationToken
+    )
+    {
+        ArgumentNullException.ThrowIfNull(stock);
+        ArgumentNullException.ThrowIfNull(response);
+        if (!long.TryParse(stock.Cik, out var issuerCik) || issuerCik != response.Cik)
+            throw new InvalidDataException(
+                $"Company Facts CIK {response.Cik} does not match issuer CIK {stock.Cik}."
+            );
+
+        return ImportCore(
+            stock,
+            (_, _) => Task.FromResult<List<CompanyFactsResponse>>([response]),
+            cancellationToken,
+            throwOnError: true,
+            updateSharesOutstanding: false
         );
     }
 
     private async Task ImportCore(
         EquityIssuer stock,
         Func<EquityIssuer, CancellationToken, Task<List<CompanyFactsResponse>>> loadFacts,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool throwOnError = false,
+        bool updateSharesOutstanding = true
     )
     {
         if (string.IsNullOrEmpty(stock.Cik))
@@ -114,14 +146,24 @@ public class FinancialFactsImportService
 
         var status = await GetSyncStatus(stock, cancellationToken);
         if (_attempts.IsDeferred(status))
+        {
+            if (throwOnError)
+                throw new InvalidOperationException(
+                    $"Financial facts import for {stock.Presentation?.Listing?.Ticker} is deferred after a previous failure."
+                );
             return;
+        }
 
         try
         {
             var responses = await loadFacts(stock, cancellationToken);
             if (responses is null)
                 return;
-            await ImportAttempt(stock, responses, cancellationToken);
+            var imported = await ImportAttempt(stock, responses, cancellationToken, updateSharesOutstanding);
+            if (!imported && throwOnError)
+                throw new InvalidOperationException(
+                    $"Financial facts import for {stock.Presentation?.Listing?.Ticker} was deferred because fiscal-calendar evidence was incomplete or the issuer disappeared."
+                );
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -135,6 +177,9 @@ public class FinancialFactsImportService
                 stock.Presentation?.Listing?.Ticker,
                 stock.Cik
             );
+            if (throwOnError)
+                throw;
+
             await _errorReporter.Report(
                 ErrorSource.FinancialFactsScraper,
                 "FinancialFactsImport.Import",
@@ -183,10 +228,11 @@ public class FinancialFactsImportService
         return responses;
     }
 
-    private async Task ImportAttempt(
+    private async Task<bool> ImportAttempt(
         EquityIssuer stock,
         List<CompanyFactsResponse> responses,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool updateSharesOutstanding
     )
     {
         // Guards GH-1591: the stock can be deleted during the network calls
@@ -200,12 +246,12 @@ public class FinancialFactsImportService
                 stock.Id,
                 stock.Presentation?.Listing?.Ticker
             );
-            return;
+            return false;
         }
 
         var claim = await _attempts.TryBegin(stock.Id, cancellationToken);
         if (claim == null)
-            return;
+            return false;
         var attemptId = claim.Value;
 
         var incomingAnnualPeriods = responses
@@ -245,7 +291,7 @@ public class FinancialFactsImportService
                 "Fiscal calendar evidence is incomplete for {Ticker}; deferring import",
                 stock.Presentation?.Listing?.Ticker
             );
-            return;
+            return false;
         }
         var parsed = responses
             .SelectMany(response => ParseFacts(response, stock, calendar))
@@ -260,7 +306,7 @@ public class FinancialFactsImportService
                 calendar.Fingerprint,
                 cancellationToken
             );
-            return;
+            return true;
         }
 
         var maxFiled = parsed.Max(p => p.Filed);
@@ -285,7 +331,8 @@ public class FinancialFactsImportService
             // and skip the (expensive) re-upsert of the full history. Still re-source the share
             // count: an already-ingested cover-page fact may post-date the stale Yahoo figure
             // (and this corrects existing rows the first cycle after the change ships).
-            await UpdateSharesOutstanding(stock, cancellationToken);
+            if (updateSharesOutstanding)
+                await UpdateSharesOutstanding(stock, cancellationToken);
             await _attempts.Complete(
                 stock.Id,
                 attemptId,
@@ -293,11 +340,12 @@ public class FinancialFactsImportService
                 calendar.Fingerprint,
                 cancellationToken
             );
-            return;
+            return true;
         }
 
         await PersistFacts(stock, parsed, cancellationToken);
-        await UpdateSharesOutstanding(stock, cancellationToken);
+        if (updateSharesOutstanding)
+            await UpdateSharesOutstanding(stock, cancellationToken);
         await _attempts.Complete(
             stock.Id,
             attemptId,
@@ -305,6 +353,7 @@ public class FinancialFactsImportService
             calendar.Fingerprint,
             cancellationToken
         );
+        return true;
     }
 
     // Sets the stock's share count from the authoritative SEC cover-page fact the import just

@@ -1,0 +1,23 @@
+# Explicitly opt-in one-shot command. Do not include this file in routine `compose up`.
+services:
+  msft-sec-once:
+    profiles: [investment-pilot]
+    build:
+      context: .
+      dockerfile: src/Equibles.InvestmentPilot/Dockerfile
+    image: local/equibles-investment-pilot:msft
+    command: ["--execute-msft-once"]
+    restart: "no"
+    network_mode: "service:db"
+    environment:
+      ConnectionStrings__DefaultConnection: ${MSFT_PILOT_DB_CONNECTION_STRING:?Set the local one-shot DB connection string with host 127.0.0.1}
+      Sec__ContactEmail: ${SEC_CONTACT_EMAIL:?Set the genuine SEC contact email in the local ignored .env}
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 512m
+    cpus: 0.50
+    pids_limit: 64

@@ -21,10 +21,10 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
-      - name: Run CIK guard unit test
+      - name: Run bounded SEC adapter and migration rollback unit tests
         run: >-
           dotnet test tests/Equibles.UnitTests/Equibles.UnitTests.csproj
-          --filter "FullyQualifiedName~FinancialFactsImportProvidedFactsTests"
+          --filter "FullyQualifiedName~InvestmentPilot|FullyQualifiedName~FinancialFactsImportProvidedFactsTests"
       - name: Run MSFT offline importer and Web/MCP integration tests
         run: >-
           dotnet test tests/Equibles.IntegrationTests/Equibles.IntegrationTests.csproj

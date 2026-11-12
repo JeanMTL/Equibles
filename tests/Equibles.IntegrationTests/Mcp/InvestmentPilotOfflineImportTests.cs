@@ -6,6 +6,7 @@ using Equibles.Errors.BusinessLogic;
 using Equibles.Errors.Data.Models;
 using Equibles.Integrations.Sec.Contracts;
 using Equibles.Integrations.Sec.Models.Responses;
+using Equibles.InvestmentPilot;
 using Equibles.IntegrationTests.Helpers;
 using Equibles.Sec.FinancialFacts.BusinessLogic;
 using Equibles.Sec.FinancialFacts.Data.Models;
@@ -87,8 +88,32 @@ public sealed class InvestmentPilotOfflineImportTests : ParadeDbMcpTestBase
             errorReporter
         );
 
-        await importer.ImportProvidedFacts(issuer, response, CancellationToken.None);
-        await importer.ImportProvidedFacts(issuer, response, CancellationToken.None);
+        var source = new OfflineCompanyFactsSource(response);
+        var runner = new MsftSecImportRunner(
+            DbContext,
+            importer,
+            source,
+            NullLogger<MsftSecImportRunner>()
+        );
+        var report = await runner.RunOnceAsync("owner@example.org", CancellationToken.None);
+
+        report.RequestCount.Should().Be(1);
+        report.DownloadedBodyBytes.Should().BeGreaterThan(0);
+        report.SourceUrl.Should().Be(BoundedSecCompanyFactsSource.AllowedUrl);
+        report.CandidateObservationsAfterDateFloor.Should().BeGreaterThan(0);
+        report.UnsupportedTaxonomyObservations.Should().Be(0);
+        report.PersistedSourceFactRows.Should().Be(3);
+
+        var repeatRunner = new MsftSecImportRunner(
+            DbContext,
+            importer,
+            new OfflineCompanyFactsSource(response),
+            NullLogger<MsftSecImportRunner>()
+        );
+        var repeatReport = await repeatRunner.RunOnceAsync("owner@example.org", CancellationToken.None);
+        repeatReport.NewFactRows.Should().Be(0);
+        repeatReport.ChangedFactRows.Should().Be(0);
+        repeatReport.PersistedSourceFactRows.Should().Be(3);
 
         var stored = await DbContext
             .Set<FinancialFact>()
@@ -131,6 +156,25 @@ public sealed class InvestmentPilotOfflineImportTests : ParadeDbMcpTestBase
         result.Should().Contain("Source CIK");
         result.Should().Contain("0000789019");
         result.Should().Contain("https://data.sec.gov/api/xbrl/companyfacts/CIK0000789019.json");
+    }
+
+    private sealed class OfflineCompanyFactsSource(CompanyFactsResponse response) : ISecCompanyFactsSource
+    {
+        public Task<SecCompanyFactsDownload> FetchMsftAsync(
+            string contactEmail,
+            CancellationToken cancellationToken
+        )
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new SecCompanyFactsDownload(
+                response,
+                new Uri(BoundedSecCompanyFactsSource.AllowedUrl),
+                RequestCount: 1,
+                DownloadedBodyBytes: 128,
+                RetrievedAtUtc: DateTimeOffset.UtcNow,
+                ObservationCount: 3
+            ));
+        }
     }
 
     private IServiceScopeFactory CreateImportScopeFactory()
