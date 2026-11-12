@@ -1,34 +1,66 @@
 # MSFT one-shot SEC Company Facts run
 
-This is an operator runbook only. It is not authorization to run SEC requests or deploy to the NAS. The command is MSFT-only and does not start `Equibles.Worker.Host`.
+This is an operator runbook only. It is not authorization to deploy, modify the NAS database, or make a live SEC request. Keep the PR Draft until the owner reviews and separately authorizes the deployment and first live run.
+
+## Production issuer preflight (read-only)
+
+The one-shot runner requires exactly one issuer for CIK 0000789019 and a US presentation listing with ticker MSFT. Equibles may store SEC CIKs either zero-padded or canonical, so the preflight and runner compare both forms. The runner fails before contacting SEC if the match is absent, duplicated, or has a different presentation listing.
+
+At the NAS SSH shell, run this one read-only command. It prompts for sudo interactively, performs a SELECT only, does not print credentials, and does not start/restart a service:
+
+```sh
+sudo docker compose -f /volume1/docker/investment-equibles/compose.yaml exec -T db psql -U equibles -d equibles -X -A -F '|' -c "SELECT i.\"Id\", i.\"Name\", i.\"Cik\", l.\"Ticker\", l.\"MarketCountryCode\", l.\"Active\" FROM \"EquityIssuer\" i LEFT JOIN \"EquityIssuerPresentation\" p ON p.\"EquityIssuerId\" = i.\"Id\" LEFT JOIN \"EquityListing\" l ON l.\"Id\" = p.\"EquityListingId\" WHERE ltrim(i.\"Cik\", '0') = '789019' ORDER BY i.\"Id\""
+```
+
+Expected evidence is exactly one row, with `MSFT|US|t` (case-insensitive ticker) and a Microsoft issuer name. Zero rows means no issuer is seeded; multiple rows or a different listing means ambiguous identity. In either case do not run the SEC importer. Do not insert rows with ad-hoc SQL or invoke the original Worker. A single-company bootstrap must use an authoritative, captured US listing record through Equibles' `EquityDirectoryIdentityImporter`, verify the listing's identity/source and bind CIK 789019 under its identity transaction, then rerun this SELECT. That bootstrap is not currently included in this PR and would need a separate reviewed, tested change before it can be used.
 
 ## Hard limits in code
 
-- One `GET` to `https://data.sec.gov/api/xbrl/companyfacts/CIK0000789019.json`; no caller-supplied CIK, URL, submissions archive, index, filing archive, pagination, redirect, or retry.
-- CIK must be `0000789019`; SEC `entityName` must identify Microsoft; the existing Equibles issuer must already resolve to exactly one US `MSFT` listing. The runner never creates or merges issuers.
-- At most one request, 25 MiB response body, 45-second request timeout, 5-minute total run deadline (also enforced by the container's `timeout` process wrapper), and 100,000 Company Facts observations. A 403/429, unexpected content type/encoding, identity mismatch, excess budget, or timeout aborts the run without retry.
-- Only observations with SEC filing date from `2023-01-01` through the retrieval date are passed to the existing `FinancialFactsImportService`. It records units (including currency units), accession, form, filed date, period, CIK, and official API source URL. The one-shot path skips share-count/derived-security updates.
-- The executable requires the exact `--execute-msft-once` argument. It checks the provenance migration and refuses pending migrations before making the SEC request. It never applies schema migrations itself.
+- One `GET` to `https://data.sec.gov/api/xbrl/companyfacts/CIK0000789019.json`; no caller-supplied CIK/URL, submissions archive, index, filing archive, pagination, redirect, or retry.
+- SEC response CIK must equal 789019 and entity name must identify Microsoft. The database must already contain exactly one identity-resolved MSFT/US issuer.
+- At most one request, 25 MiB response body, 45-second request timeout, five-minute total run deadline (also enforced by the container's `timeout` wrapper), and 100,000 Company Facts observations. A 403/429, unexpected content type/encoding, identity mismatch, excess budget, or timeout aborts without retry.
+- Only observations with SEC filing date from `2023-01-01` through retrieval date are passed to the existing `FinancialFactsImportService`. It records source CIK, official API URL, accession, form, filed date, period and unit/currency. The one-shot path skips share-count/derived-security updates.
+- The executable requires `--execute-msft-once`. It checks database reachability, exact issuer identity, the provenance migration and absence of pending migrations before making the SEC request. It never applies migrations itself.
+- The container has a 1 GiB memory limit, 0.5 CPU and 64 PIDs. This is headroom for the fully materialized JSON plus up to 100k observations; actual peak memory is not measured yet and remains a first-run acceptance item.
 
-## First-run gates
+## Deployment and first-run gates
 
-1. Review and merge the Draft PR, then deploy the reviewed Web/MCP version and let the normal application migration process apply `20261112003749_InvestmentPilotFactProvenance`. This POC does not deploy or migrate the NAS.
-2. Before any first write, take a verified backup of the Equibles database and confirm the restore procedure. Check that Web/MCP are healthy, the original Worker is stopped/disabled, and the live DB reports the required migration applied with no pending migrations.
-3. On the NAS, edit the ignored local `.env` only: set a genuine `SEC_CONTACT_EMAIL` and `MSFT_PILOT_DB_CONNECTION_STRING` for the existing Equibles database using `Host=127.0.0.1;Port=5432` (the one-shot container shares only the existing DB container's network namespace). Keep credentials out of GitHub, logs, and chat.
-4. From the project directory, run exactly once after the gates above:
+The NAS project root is `/volume1/docker/investment-equibles`; the checkout is `/volume1/docker/investment-equibles/source`. The production base file is `compose.yaml`, while the pilot override will be in the reviewed source checkout as `docker-compose.investment-pilot.yml`. Do not run these commands until that exact reviewed commit is present in `source` and deployment is separately authorized.
 
-   ```sh
-   sudo docker compose -f docker-compose.yml -f docker-compose.investment-pilot.yml build msft-sec-once
-   sudo docker compose -f docker-compose.yml -f docker-compose.investment-pilot.yml run --rm --no-deps msft-sec-once
+1. Review and merge the Draft PR only after owner approval. Back up the Equibles DB using the commands below. Confirm the backup archive can be listed. Restore-test it into a disposable ParadeDB clone before relying on it for a production rollback; no current NAS backup archive or restore test was found during this read-only check.
+2. Deploy the reviewed Web/MCP build through the normal approved deployment process so the additive migration `20261112003749_InvestmentPilotFactProvenance` is applied. Do not run migration commands from this one-shot container. Then verify migration state and health before any pilot import. The migration adds only nullable `SourceCik` and `SourceUrl` columns; its `Down()` drops those columns. The CI integration runs against disposable ParadeDB; production migration state has not yet been read because Docker access requires interactive sudo.
+3. Set a genuine `SEC_CONTACT_EMAIL` only in the ignored local `.env` at the project root. The compose file derives the pilot connection from the existing `POSTGRES_USER` and `POSTGRES_PASSWORD`; no duplicate DB secret is needed. Never print, commit or send `.env` values.
+4. First validate the exact merged file paths without printing resolved configuration (run from PowerShell):
+
+   ```powershell
+   ssh -t omnia-nas 'cd /volume1/docker/investment-equibles && EQUIBLES_SOURCE_DIR=/volume1/docker/investment-equibles/source SEC_CONTACT_EMAIL=compose-check@example.invalid docker compose -f compose.yaml -f source/docker-compose.investment-pilot.yml config --quiet'
    ```
 
-   The profile keeps this service out of routine `compose up`; it has no published ports, mounts, restart loop, or dependency startup. `--no-deps` prevents Compose from starting/recreating the DB or any other service. The DB must already be healthy.
-5. Stop and do not rerun automatically if the process reports a budget/identity/status error. Save its JSON result and local Compose resource summary; then inspect the current Web financials page and MCP revenue query for MSFT. The report includes request count/body bytes/retrieval time, facts outside the date window, unsupported-taxonomy observations, filtered accessions, persisted sourced rows, changed/new/unchanged/removed fact counts, and units. The importer accepts recognized taxonomies and does not expose a separate semantic “unknown tag” metric; unsupported taxonomies are counted. Missing/unmapped SEC facts are not evidence of complete financial statements.
+   This only parses/validates Compose; `compose-check@example.invalid` is a non-routable placeholder and no SEC request is made. It is safe only after the override exists in the deployed checkout. The service uses `network_mode: service:db`, publishes no ports, has no bind mounts and no dependency startup. `--no-deps` below prevents Compose from starting/recreating DB, Web, MCP or Worker.
+5. From the NAS shell in the project root, after the above gates and only once, build the pilot against the exact installed source tree and invoke it:
 
-## Migration and rollback
+   ```sh
+   sudo env EQUIBLES_SOURCE_DIR=/volume1/docker/investment-equibles/source docker compose -f /volume1/docker/investment-equibles/compose.yaml -f /volume1/docker/investment-equibles/source/docker-compose.investment-pilot.yml build msft-sec-once
+   sudo env EQUIBLES_SOURCE_DIR=/volume1/docker/investment-equibles/source docker compose -f /volume1/docker/investment-equibles/compose.yaml -f /volume1/docker/investment-equibles/source/docker-compose.investment-pilot.yml run --rm --no-deps msft-sec-once
+   ```
 
-The migration only adds nullable `SourceCik` (`varchar(10)`) and `SourceUrl` (`varchar(2048)`) to `FinancialFact`; it does not rewrite existing rows. Its `Down()` drops those two columns. Migration application happens during the reviewed Web deployment, never in the one-shot executable.
+   Compose reads `.env` relative to the project root. It will fail closed if `SEC_CONTACT_EMAIL` is unset, DB is unhealthy, migration is missing/pending, or the exact issuer preflight fails. The profile keeps the service out of routine `compose up`; it has no published ports, restart loop or dependency startup.
+6. Stop and do not rerun automatically if the process reports a budget, identity or status error. Save the JSON result and resource summary, then inspect MSFT through the current Web financials page and MCP revenue query. The report includes request count/body bytes/retrieval time, date-excluded and unsupported-taxonomy observations, accessions, sourced facts, fact-row changes and units. Unsupported taxonomies are counted; semantic unknown tags and missing/unmapped filings are not reported as completeness evidence.
 
-Rolling back only the schema after the pilot has written rows removes the source metadata from those rows, so do not treat that as a complete data rollback. The importer can upsert existing MSFT facts and retire superseded filing-XBRL fills; therefore deleting all MSFT rows by CIK is not a safe rollback. If the one-shot run must be reversed, stop further writes and restore the verified pre-run Equibles database backup using the site's established restore procedure. This may discard later database writes, which is why a consistent backup and a quiet maintenance window are required before any future live run.
+## Backup, restore and rollback
 
-No commands in this runbook have been executed against the NAS in this code/test phase.
+Before any future live write, use the project's own DB container to make a custom-format dump. These commands write only a new archive in the dedicated `backups` directory:
+
+```sh
+umask 077
+backup="/volume1/docker/investment-equibles/backups/equibles-pre-msft-$(date -u +%Y%m%dT%H%M%SZ).dump"
+sudo docker compose -f /volume1/docker/investment-equibles/compose.yaml exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$backup"
+sudo chmod 600 "$backup"
+sudo docker compose -f /volume1/docker/investment-equibles/compose.yaml exec -T db pg_restore --list - < "$backup" >/dev/null
+```
+
+Listing the archive proves it is readable, not that it can restore. Before the first live run, restore a copy into an isolated disposable ParadeDB database/container and verify its schema/data; never use production as the restore test. No existing backup archive was present in the dedicated backups directory during the check for this PR.
+
+If a live import later needs rollback, stop further writes and restore the pre-run backup using the site's reviewed recovery procedure during a planned quiet window. Restoring over the live database can discard all writes after the backup and requires stopping dependent application writes; do not improvise a production restore. Dropping only the provenance columns with migration `Down()` erases source metadata and is not a data rollback. The importer can upsert existing MSFT facts and retire superseded filing-XBRL fills, so deleting MSFT rows is not safe.
+
+No database, container, NAS source checkout, or service was changed by preparing this runbook. No real SEC request has been made.

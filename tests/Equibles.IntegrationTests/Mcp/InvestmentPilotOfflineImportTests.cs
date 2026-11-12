@@ -39,13 +39,17 @@ public sealed class InvestmentPilotOfflineImportTests : ParadeDbMcpTestBase
         return base.DisposeAsync();
     }
 
-    [Fact]
-    public async Task SyntheticMsftCompanyFacts_ImportsIdempotently_AndIsVisibleThroughMcp()
+    [Theory]
+    [InlineData("0000789019")]
+    [InlineData("789019")]
+    public async Task SyntheticMsftCompanyFacts_ImportsIdempotently_AndIsVisibleThroughMcp(
+        string storedCik
+    )
     {
         var issuer = Equibles.TestSupport.EquityIssuerSeed.Create(
             Ticker: "MSFT",
             Name: "Microsoft Corporation (synthetic test fixture)",
-            Cik: "0000789019",
+            Cik: storedCik,
             FiscalYearEndMonth: 6,
             FiscalYearEndDay: 30
         );

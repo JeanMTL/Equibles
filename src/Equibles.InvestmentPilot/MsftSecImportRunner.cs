@@ -1,3 +1,4 @@
+using Equibles.CommonStocks.Data.Helpers;
 using Equibles.CommonStocks.Data.Models;
 using Equibles.Data;
 using Equibles.Integrations.Sec.Models.Responses;
@@ -40,6 +41,7 @@ public sealed class MsftSecImportRunner(
 )
 {
     public const string Cik = "0000789019";
+    private const string CanonicalCik = "789019";
     public const string Ticker = "MSFT";
     public const string RequiredMigration = "20261112003749_InvestmentPilotFactProvenance";
     public static readonly DateOnly FiledDateFloor = new(2023, 1, 1);
@@ -157,8 +159,14 @@ public sealed class MsftSecImportRunner(
         var matches = await db.Set<EquityIssuer>()
             .Include(issuer => issuer.Presentation)
             .ThenInclude(presentation => presentation.Listing)
-            .Where(issuer => issuer.Cik == Cik)
+            // Equibles stores CIKs in their source-preserved form. SEC directory
+            // imports commonly store unpadded digits, while fixtures and other
+            // sources may retain the ten-digit form.
+            .Where(issuer => issuer.Cik == Cik || issuer.Cik == CanonicalCik)
             .ToListAsync(cancellationToken);
+        matches = matches
+            .Where(issuer => CikNormalizer.Canonicalize(issuer.Cik) == CanonicalCik)
+            .ToList();
         if (matches.Count != 1)
             throw new InvalidOperationException("Expected exactly one existing Equibles issuer for CIK 0000789019; no SEC request was made.");
 

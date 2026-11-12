@@ -3,14 +3,14 @@ services:
   msft-sec-once:
     profiles: [investment-pilot]
     build:
-      context: .
+      context: ${EQUIBLES_SOURCE_DIR:?Set EQUIBLES_SOURCE_DIR to /volume1/docker/investment-equibles/source}
       dockerfile: src/Equibles.InvestmentPilot/Dockerfile
     image: local/equibles-investment-pilot:msft
     command: ["--execute-msft-once"]
     restart: "no"
     network_mode: "service:db"
     environment:
-      ConnectionStrings__DefaultConnection: ${MSFT_PILOT_DB_CONNECTION_STRING:?Set the local one-shot DB connection string with host 127.0.0.1}
+      ConnectionStrings__DefaultConnection: "Host=127.0.0.1;Port=5432;Database=equibles;Username=${POSTGRES_USER:-equibles};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the project .env}"
       Sec__ContactEmail: ${SEC_CONTACT_EMAIL:?Set the genuine SEC contact email in the local ignored .env}
     read_only: true
     tmpfs:
@@ -18,6 +18,8 @@ services:
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
-    mem_limit: 512m
+    # The materialized 25 MiB JSON and up to 100k observations need headroom.
+    # Peak live-process usage still needs measurement during the first controlled run.
+    mem_limit: 1g
     cpus: 0.50
     pids_limit: 64
