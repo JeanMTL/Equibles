@@ -1,3 +1,4 @@
+using System.Globalization;
 using Equibles.CommonStocks.Data.Extensions;
 using Equibles.CommonStocks.Data.Models;
 using Equibles.CommonStocks.Repositories;
@@ -459,6 +460,8 @@ public class FinancialFactsImportService
         HistoricalFiscalCalendar calendar
     )
     {
+        var sourceCik = response.Cik.ToString("D10", CultureInfo.InvariantCulture);
+        var sourceUrl = $"https://data.sec.gov/api/xbrl/companyfacts/CIK{sourceCik}.json";
         foreach (var (taxonomyKey, concepts) in response.Facts)
         {
             if (!TryMapTaxonomy(taxonomyKey, out var taxonomy))
@@ -478,7 +481,9 @@ public class FinancialFactsImportService
                             unit,
                             value,
                             stock,
-                            calendar
+                            calendar,
+                            sourceCik,
+                            sourceUrl
                         );
                         if (fact != null)
                             yield return fact;
@@ -507,7 +512,9 @@ public class FinancialFactsImportService
         string unit,
         CompanyFactValue value,
         EquityIssuer stock,
-        HistoricalFiscalCalendar calendar
+        HistoricalFiscalCalendar calendar,
+        string sourceCik = null,
+        string sourceUrl = null
     )
     {
         if (string.IsNullOrWhiteSpace(value.Accn))
@@ -561,6 +568,8 @@ public class FinancialFactsImportService
             Filed = value.Filed,
             Accession = value.Accn,
             Frame = value.Frame,
+            SourceCik = sourceCik,
+            SourceUrl = sourceUrl,
         };
     }
 
@@ -713,6 +722,8 @@ public class FinancialFactsImportService
             Form = DocumentType.FromDisplayName(p.Form) ?? DocumentType.Other,
             FiledDate = p.Filed,
             AccessionNumber = p.Accession,
+            SourceCik = p.SourceCik,
+            SourceUrl = p.SourceUrl,
             Frame = p.Frame,
             Source = FinancialFactSource.CompanyFacts,
         };
@@ -808,6 +819,8 @@ public class FinancialFactsImportService
                         Form = incoming.Form,
                         Frame = incoming.Frame,
                         FiledDate = incoming.FiledDate,
+                        SourceCik = incoming.SourceCik,
+                        SourceUrl = incoming.SourceUrl,
                         DocumentId = incoming.DocumentId,
                         Source = incoming.Source,
                     }
@@ -824,6 +837,8 @@ public class FinancialFactsImportService
                     || (existing.Frame == null && incoming.Frame != null)
                     || (existing.Frame != null && incoming.Frame == null)
                     || existing.FiledDate != incoming.FiledDate
+                    || existing.SourceCik != incoming.SourceCik
+                    || existing.SourceUrl != incoming.SourceUrl
                     || existing.DocumentId != incoming.DocumentId
                     || (existing.DocumentId == null && incoming.DocumentId != null)
                     || (existing.DocumentId != null && incoming.DocumentId == null)
@@ -1028,6 +1043,8 @@ public class FinancialFactsImportService
         public DateOnly Filed { get; init; }
         public string Accession { get; init; }
         public string Frame { get; init; }
+        public string SourceCik { get; init; }
+        public string SourceUrl { get; init; }
     }
 
     private sealed record FactNaturalKey(

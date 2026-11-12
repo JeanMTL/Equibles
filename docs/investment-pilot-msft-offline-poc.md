@@ -24,19 +24,28 @@ workers; the Web test exercises only its existing test host and disposable test 
 Docker with the ParadeDB test image and the .NET 10 SDK are required to run these integration
 tests. No NAS runtime configuration or production database is read or changed.
 
+When a developer workstation has no Docker engine, the dedicated
+`.github/workflows/msft-offline-poc.yml` job runs these same filtered tests on a disposable
+GitHub-hosted runner. Testcontainers owns the temporary ParadeDB lifetime; the job has no NAS
+credentials, does not publish database ports, and makes no SEC or other upstream API calls. This
+is the preferred isolated execution path. Do not substitute the production NAS database. A NAS
+fallback would need separate owner approval and an independently reviewed, resource-capped project
+and database before any run.
+
 ## Provenance represented by the current schema
 
-The imported `FinancialFact` preserves the CIK through its related `EquityIssuer`, plus the
-Company Facts taxonomy/tag, reported value, unit, period start/end, fiscal year/period, filing
-form, filed date, accession number, and `FinancialFactSource.CompanyFacts`. The synthetic
-submissions fixture cross-checks the CIK, accession, filing date, report date, form, and primary
-document metadata.
+The importer now persists the ten-digit source CIK and the official per-CIK SEC Company Facts
+endpoint on each imported fact, along with Company Facts taxonomy/tag, reported value, unit,
+period start/end, fiscal year/period, filing form, filed date, accession number, and
+`FinancialFactSource.CompanyFacts`. MCP's `GetFinancialFact` includes the source CIK and API
+URL in each fact row. The synthetic submissions fixture cross-checks the CIK, accession,
+filing date, report date, form, and primary document metadata.
 
-The existing `FinancialFact` schema does **not** retain the Company Facts or filing source URL.
-`DocumentId` is optional and this POC does not fabricate a `Document` record or claim an exact
-filing URL was persisted. The source URL is therefore a known provenance gap, not a test pass.
-Adding a URL field or immutable source-document linkage would require a separate schema and
-migration review before real collection.
+The URL identifies the official Company Facts API payload source, not the individual filing's
+primary document. This fixture includes a synthetic `primaryDocument` name but deliberately
+does not fabricate a full filing URL or a `Document` row. Exact filing-document linkage remains
+unverified and should be added only when a saved submissions record is paired with a real
+filing's primary document metadata.
 
 The numbers and accession in the fixtures are invented test values and must never be presented
 as Microsoft's reported financials. No live SEC endpoint, paid data provider, Worker, NAS service,

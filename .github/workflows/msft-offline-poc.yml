@@ -1,0 +1,32 @@
+name: MSFT offline import POC
+
+on:
+  push:
+    branches: [codex/investment-pilot-msft-poc]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: msft-offline-poc-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  isolated-paradedb-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run CIK guard unit test
+        run: >-
+          dotnet test tests/Equibles.UnitTests/Equibles.UnitTests.csproj
+          --filter "FullyQualifiedName~FinancialFactsImportProvidedFactsTests"
+      - name: Run MSFT offline importer and Web/MCP integration tests
+        run: >-
+          dotnet test tests/Equibles.IntegrationTests/Equibles.IntegrationTests.csproj
+          --filter "FullyQualifiedName~InvestmentPilotOfflineImport"
+          --logger "trx;LogFileName=msft-offline-poc.trx"

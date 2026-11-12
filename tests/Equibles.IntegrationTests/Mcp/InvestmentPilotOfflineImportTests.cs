@@ -96,6 +96,10 @@ public sealed class InvestmentPilotOfflineImportTests : ParadeDbMcpTestBase
             .Where(f => f.EquityIssuerId == issuer.Id)
             .ToListAsync();
         stored.Should().HaveCount(3);
+        stored.Should().OnlyContain(f =>
+            f.SourceCik == "0000789019"
+            && f.SourceUrl == "https://data.sec.gov/api/xbrl/companyfacts/CIK0000789019.json"
+        );
         stored
             .Should()
             .ContainSingle(f => f.FinancialConcept.Tag == "Revenues")
@@ -107,6 +111,8 @@ public sealed class InvestmentPilotOfflineImportTests : ParadeDbMcpTestBase
                 && f.FiscalYear == 2025
                 && f.FiledDate == new DateOnly(2025, 7, 30)
                 && f.AccessionNumber == "0000789019-25-000001"
+                && f.SourceCik == "0000789019"
+                && f.SourceUrl == "https://data.sec.gov/api/xbrl/companyfacts/CIK0000789019.json"
             );
 
         await secClient.DidNotReceiveWithAnyArgs().GetCompanyFacts(default);
@@ -130,6 +136,9 @@ public sealed class InvestmentPilotOfflineImportTests : ParadeDbMcpTestBase
         result.Should().Contain("FY2025");
         result.Should().Contain("123,456,789,000");
         result.Should().Contain("USD");
+        result.Should().Contain("Source CIK");
+        result.Should().Contain("0000789019");
+        result.Should().Contain("https://data.sec.gov/api/xbrl/companyfacts/CIK0000789019.json");
     }
 
     private IServiceScopeFactory CreateImportScopeFactory()

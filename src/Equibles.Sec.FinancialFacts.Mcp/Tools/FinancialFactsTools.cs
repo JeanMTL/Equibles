@@ -574,8 +574,8 @@ public class FinancialFactsTools
         var basis = asOriginallyReported ? "as originally reported" : "latest restated";
         var result = MarkdownTable.Start(
             $"{concept} for {EquityListingSymbol.Display(stock)} ({FactMarkdown.Cell(stock.Name)}) — {basis}:",
-            "| Period Start | Period End | FY | Period | Value | Unit | Form | Filed | Accession |",
-            "|--------------|------------|---:|--------|------:|------|------|-------|-----------|"
+            "| Period Start | Period End | FY | Period | Value | Unit | Form | Filed | Accession | Source CIK | Source URL |",
+            "|--------------|------------|---:|--------|------:|------|------|-------|-----------|------------|------------|"
         );
         var splitAdjusted = false;
         var unresolvedBasis = false;
@@ -599,7 +599,9 @@ public class FinancialFactsTools
                     + $"{FactMarkdown.Cell(f.Unit)} | "
                     + $"{FactMarkdown.Cell(f.Form?.DisplayName)} | "
                     + $"{f.FiledDate:yyyy-MM-dd} | "
-                    + $"{FactMarkdown.Cell(f.AccessionNumber)} |";
+                    + $"{FactMarkdown.Cell(f.AccessionNumber)} | "
+                    + $"{FactMarkdown.Cell(f.SourceCik)} | "
+                    + $"{FactMarkdown.Cell(f.SourceUrl)} |";
             }
         );
 
